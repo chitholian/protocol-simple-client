@@ -12,7 +12,11 @@ import android.media.AudioTrack
  * ignored by many OEMs (notably Samsung), so the track is rebuilt on the
  * pw-read thread when a device change is pending.
  */
-class PlaybackEngine(val sampleRate: Int, private val channels: Int) {
+class PlaybackEngine(
+    val sampleRate: Int,
+    private val channels: Int,
+    private val micEnabled: Boolean = false,
+) {
     private var track: AudioTrack? = null
     private var framesWritten = 0L
 

@@ -67,19 +67,27 @@ class CaptureEngine(
         if (anc) {
             try {
                 if (AcousticEchoCanceler.isAvailable()) {
-                    AcousticEchoCanceler.create(rec.audioSessionId)
-                        ?.also { it.enabled = true }
-                        ?.let { aec = it }
+                    aec = AcousticEchoCanceler.create(rec.audioSessionId)?.apply {
+                        enabled = true
+                    }
+                    android.util.Log.d("CaptureEngine", "AEC enabled on audioSessionId=${rec.audioSessionId}, active=${aec?.enabled}")
+                } else {
+                    android.util.Log.w("CaptureEngine", "AcousticEchoCanceler is not available on this device")
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.e("CaptureEngine", "Failed to enable AEC: ${e.message}")
             }
             try {
                 if (NoiseSuppressor.isAvailable()) {
-                    NoiseSuppressor.create(rec.audioSessionId)
-                        ?.also { it.enabled = true }
-                        ?.let { ns = it }
+                    ns = NoiseSuppressor.create(rec.audioSessionId)?.apply {
+                        enabled = true
+                    }
+                    android.util.Log.d("CaptureEngine", "NoiseSuppressor enabled on audioSessionId=${rec.audioSessionId}, active=${ns?.enabled}")
+                } else {
+                    android.util.Log.w("CaptureEngine", "NoiseSuppressor is not available on this device")
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.e("CaptureEngine", "Failed to enable NS: ${e.message}")
             }
         }
 
