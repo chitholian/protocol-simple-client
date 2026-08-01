@@ -128,6 +128,13 @@ class CaptureEngine(
         }
 
         if (btInput != null) {
+            val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+            val curVol = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+            if (curVol < (maxVol * 0.8).toInt()) {
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (maxVol * 0.85).toInt(), 0)
+                android.util.Log.d("CaptureEngine", "Boosted Bluetooth Call Volume to ${(maxVol * 0.85).toInt()}/$maxVol")
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val commDevs = am.availableCommunicationDevices
                 val targetComm = commDevs.firstOrNull {

@@ -15,7 +15,6 @@ import android.media.AudioTrack
 class PlaybackEngine(
     val sampleRate: Int,
     private val channels: Int,
-    private val micEnabled: Boolean = false,
 ) {
     private var track: AudioTrack? = null
     private var framesWritten = 0L

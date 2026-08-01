@@ -50,7 +50,7 @@ class ClientSession(
                 sock.connect(InetSocketAddress(host, port), 5000)
                 android.util.Log.d("PWDBG", "connect t1 sock=${SystemClock.elapsedRealtime() - t0}ms")
 
-                val pl = PlaybackEngine(rate, channels, micEnabled = !disableMic)
+                val pl = PlaybackEngine(rate, channels)
                 pl.open()
                 android.util.Log.d("PWDBG", "connect t2 open=${SystemClock.elapsedRealtime() - t0}ms")
 
