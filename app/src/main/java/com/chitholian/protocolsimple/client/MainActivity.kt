@@ -116,10 +116,61 @@ class MainActivity : AppCompatActivity() {
         rgDevices.setOnCheckedChangeListener { _, id -> onDeviceSelected(id) }
     }
 
+    private fun generatePipeWireConfig(): String {
+        val rate = etRate.text.toString().toIntOrNull() ?: 44100
+        val channels = etChannels.text.toString().toIntOrNull() ?: 2
+        val pos = if (channels == 1) "[ MONO ]" else "[ FL FR ]"
+        return """
+            context.modules = [
+                {   name = libpipewire-module-protocol-simple
+                    args = {
+                        capture = true
+                        playback = true
+                        server.address = [ "tcp:4711" ]
+                        audio.rate = $rate
+                        audio.format = S16LE
+                        audio.channels = $channels
+                        audio.position = $pos
+                        capture.props = {
+                            stream.capture.sink = true
+                        }
+                        playback.props = {
+                            media.class = "Audio/Source"
+                            node.latency = "256/$rate"
+                        }
+                    }
+                }
+            ]
+        """.trimIndent()
+    }
+
     private fun showSetupGuide() {
+        val config = generatePipeWireConfig()
+        val guideText = """
+            On the PC (PipeWire host):
+
+            1. Create ~/.config/pipewire/pipewire.conf.d/my-protocol-simple.conf:
+
+            $config
+
+            2. systemctl --user restart pipewire
+            3. ss -tlnp | grep 4711   # verify listener
+
+            The phone mic appears on the PC as "<phone-ip> playback" — pick it
+            as the input device in any app (OBS, Discord, browser...).
+
+            Match sample rate / channels in the app to the config above.
+        """.trimIndent()
+
         AlertDialog.Builder(this)
             .setTitle("PC setup guide")
-            .setMessage(SETUP_GUIDE)
+            .setMessage(guideText)
+            .setNeutralButton("Copy config") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText("PipeWire Config", config)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this, "Config copied to clipboard", Toast.LENGTH_SHORT).show()
+            }
             .setPositiveButton("OK", null)
             .show()
     }
@@ -308,40 +359,5 @@ class MainActivity : AppCompatActivity() {
             AudioDeviceInfo.TYPE_HDMI,
             AudioDeviceInfo.TYPE_REMOTE_SUBMIX,
         )
-
-        private val SETUP_GUIDE = """
-            On the PC (PipeWire host):
-
-            1. Create ~/.config/pipewire/pipewire.conf.d/my-protocol-simple.conf:
-
-            context.modules = [
-                {   name = libpipewire-module-protocol-simple
-                    args = {
-                        capture = true
-                        playback = true
-                        server.address = [ "tcp:4711" ]
-                        audio.rate = 44100
-                        audio.format = S16LE
-                        audio.channels = 2
-                        audio.position = [ FL FR ]
-                        capture.props = {
-                            stream.capture.sink = true
-                        }
-                        playback.props = {
-                            media.class = "Audio/Source"
-                            node.latency = "256/44100"
-                        }
-                    }
-                }
-            ]
-
-            2. systemctl --user restart pipewire
-            3. ss -tlnp | grep 4711   # verify listener
-
-            The phone mic appears on the PC as "<phone-ip> playback" — pick it
-            as the input device in any app (OBS, Discord, browser...).
-
-            Match sample rate / channels in the app to the config above.
-        """.trimIndent()
     }
 }

@@ -129,7 +129,9 @@ class AudioBridgeService : Service() {
 
     override fun onDestroy() {
         session?.disconnect()
-        stopForegroundService()
+        session = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID)
         super.onDestroy()
     }
 
