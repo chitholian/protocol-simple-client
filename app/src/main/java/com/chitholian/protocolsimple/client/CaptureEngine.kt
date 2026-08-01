@@ -82,11 +82,11 @@ class CaptureEngine(
 
     /** Blocking read of one mono chunk. Returns bytes read (>0 ok). */
     fun read(mono: ByteArray): Int {
-        if (muted) {
+        val n = record?.read(mono, 0, mono.size, AudioRecord.READ_BLOCKING) ?: 0
+        if (muted && n > 0) {
             mono.fill(0)
-            return mono.size
         }
-        return record?.read(mono, 0, mono.size, AudioRecord.READ_BLOCKING) ?: 0
+        return n
     }
 
     /**

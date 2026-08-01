@@ -42,6 +42,7 @@ class ClientSession(private val onState: (BridgeState, String) -> Unit) {
                 val sock = Socket()
                 sock.tcpNoDelay = true
                 sock.keepAlive = true
+                sock.sendBufferSize = 8192
                 sock.connect(InetSocketAddress(host, port), 5000)
                 android.util.Log.d("PWDBG", "connect t1 sock=${SystemClock.elapsedRealtime() - t0}ms")
 
