@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Local config (sdk.dir etc)
+local.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+
+# Agent/session artifacts
+.omo/
+.codegraph
+
+# Signing (never commit keystores/secrets)
+*.jks
+*.keystore
+keystore.properties
+
+# Logs
+*.log
