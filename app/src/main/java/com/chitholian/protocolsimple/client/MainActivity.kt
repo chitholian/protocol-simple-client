@@ -146,25 +146,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSetupGuide() {
         val config = generatePipeWireConfig()
-        val guideText = """
-            On the PC (PipeWire host):
-
-            1. Create ~/.config/pipewire/pipewire.conf.d/my-protocol-simple.conf:
-
-            $config
-
-            2. systemctl --user restart pipewire
-            3. ss -tlnp | grep 4711   # verify listener
-
-            The phone mic appears on the PC as "<phone-ip> playback" — pick it
-            as the input device in any app (OBS, Discord, browser...).
-
-            Match sample rate / channels in the app to the config above.
-        """.trimIndent()
+        val view = layoutInflater.inflate(R.layout.dialog_setup_guide, null)
+        val tvCodeConfig = view.findViewById<TextView>(R.id.tvCodeConfig)
+        tvCodeConfig.text = config
 
         AlertDialog.Builder(this)
             .setTitle("PC setup guide")
-            .setMessage(guideText)
+            .setView(view)
             .setNeutralButton("Copy config") { _, _ ->
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = android.content.ClipData.newPlainText("PipeWire Config", config)
