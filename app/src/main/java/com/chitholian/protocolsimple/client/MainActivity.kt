@@ -329,6 +329,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         playback.props = {
                             media.class = "Audio/Source"
+                            node.latency = "256/44100"
                         }
                     }
                 }

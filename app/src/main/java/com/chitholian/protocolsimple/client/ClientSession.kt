@@ -157,6 +157,7 @@ class ClientSession(private val onState: (BridgeState, String) -> Unit) {
                 val n = cap.read(mono)
                 if (n <= 0) throw IOException("mic read failed: $n")
                 out.write(cap.toWire(mono, n))
+                out.flush()
             }
         } catch (e: Throwable) {
             android.util.Log.e("AudioBridge", "writeLoop: ${e.message}")

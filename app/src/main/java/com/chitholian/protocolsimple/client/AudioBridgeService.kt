@@ -41,7 +41,7 @@ class AudioBridgeService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification(lastState, lastMsg))
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     fun setListener(l: ((BridgeState, String) -> Unit)?) {
@@ -58,7 +58,7 @@ class AudioBridgeService : Service() {
             lastState = BridgeState.ERROR
             lastMsg = "Microphone permission missing"
             listener?.invoke(lastState, lastMsg)
-            stopSelf()
+            stopForegroundService()
             return
         }
         session = ClientSession { state, msg ->
@@ -67,8 +67,7 @@ class AudioBridgeService : Service() {
             listener?.invoke(state, msg)
             updateNotification(state, msg)
             if (state == BridgeState.DISCONNECTED || state == BridgeState.ERROR) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopForegroundService()
             }
         }
         session?.connect(host, port, rate, channels, anc)
@@ -76,8 +75,11 @@ class AudioBridgeService : Service() {
 
     fun disconnect() {
         session?.disconnect()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        session = null
+        lastState = BridgeState.DISCONNECTED
+        lastMsg = "Disconnected"
+        listener?.invoke(lastState, lastMsg)
+        stopForegroundService()
     }
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
@@ -88,9 +90,19 @@ class AudioBridgeService : Service() {
         session?.setMicMuted(muted)
     }
 
+    private fun stopForegroundService() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID)
+        stopSelf()
+    }
+
     private fun updateNotification(state: BridgeState, msg: String) {
-        getSystemService(NotificationManager::class.java)
-            ?.notify(NOTIF_ID, buildNotification(state, msg))
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (state == BridgeState.DISCONNECTED || state == BridgeState.ERROR) {
+            nm.cancel(NOTIF_ID)
+        } else {
+            nm.notify(NOTIF_ID, buildNotification(state, msg))
+        }
     }
 
     private fun buildNotification(state: BridgeState, msg: String): android.app.Notification {
@@ -117,6 +129,7 @@ class AudioBridgeService : Service() {
 
     override fun onDestroy() {
         session?.disconnect()
+        stopForegroundService()
         super.onDestroy()
     }
 
