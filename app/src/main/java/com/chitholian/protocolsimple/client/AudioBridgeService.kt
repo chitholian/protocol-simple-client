@@ -61,7 +61,7 @@ class AudioBridgeService : Service() {
             stopForegroundService()
             return
         }
-        session = ClientSession { state, msg ->
+        session = ClientSession(this) { state, msg ->
             lastState = state
             lastMsg = msg
             listener?.invoke(state, msg)

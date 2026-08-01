@@ -1,10 +1,15 @@
 package com.chitholian.protocolsimple.client
 
+import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -15,6 +20,7 @@ import java.nio.ByteOrder
  * wire format always matches the server config (default stereo).
  */
 class CaptureEngine(
+    private val context: Context,
     private val sampleRate: Int,
     private val outChannels: Int,
     private val anc: Boolean,
@@ -23,6 +29,7 @@ class CaptureEngine(
     private var aec: AcousticEchoCanceler? = null
     private var ns: NoiseSuppressor? = null
     private var wireBuf: ByteArray? = null
+    private var deviceCallback: AudioDeviceCallback? = null
 
     /** When true, the mic stream is replaced with digital silence. */
     @Volatile
@@ -78,6 +85,75 @@ class CaptureEngine(
 
         record = rec
         rec.startRecording()
+
+        setupBluetoothAndRouting(rec)
+    }
+
+    private fun setupBluetoothAndRouting(rec: AudioRecord) {
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        updateMicRouting(am, rec)
+
+        val cb = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                updateMicRouting(am, record)
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                updateMicRouting(am, record)
+            }
+        }
+        am.registerAudioDeviceCallback(cb, null)
+        deviceCallback = cb
+    }
+
+    private fun updateMicRouting(am: AudioManager, rec: AudioRecord?) {
+        val targetRec = rec ?: return
+        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val btInput = inputs.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+        val externalMic = btInput ?: inputs.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+            it.type == AudioDeviceInfo.TYPE_USB_DEVICE
+        }
+
+        if (btInput != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val commDevs = am.availableCommunicationDevices
+                val targetComm = commDevs.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                }
+                if (targetComm != null) {
+                    am.setCommunicationDevice(targetComm)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                if (am.isBluetoothScoAvailableOffCall) {
+                    am.startBluetoothSco()
+                    am.isBluetoothScoOn = true
+                }
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                am.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                if (am.isBluetoothScoOn) {
+                    am.isBluetoothScoOn = false
+                    am.stopBluetoothSco()
+                }
+            }
+        }
+
+        if (externalMic != null) {
+            targetRec.setPreferredDevice(externalMic)
+            android.util.Log.d("CaptureEngine", "Mic preferred device set to: ${externalMic.productName} (type ${externalMic.type})")
+        } else {
+            targetRec.setPreferredDevice(null)
+            android.util.Log.d("CaptureEngine", "Mic preferred device reset to default built-in mic")
+        }
     }
 
     /** Blocking read of one mono chunk. Returns bytes read (>0 ok). */
@@ -110,6 +186,20 @@ class CaptureEngine(
     }
 
     fun release() {
+        val am = context.getSystemService(AudioManager::class.java)
+        deviceCallback?.let {
+            am?.unregisterAudioDeviceCallback(it)
+            deviceCallback = null
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            am?.clearCommunicationDevice()
+        } else {
+            @Suppress("DEPRECATION")
+            if (am?.isBluetoothScoOn == true) {
+                am.isBluetoothScoOn = false
+                am.stopBluetoothSco()
+            }
+        }
         try {
             record?.stop()
         } catch (_: Exception) {

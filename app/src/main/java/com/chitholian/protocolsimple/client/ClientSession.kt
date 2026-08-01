@@ -1,5 +1,6 @@
 package com.chitholian.protocolsimple.client
 
+import android.content.Context
 import android.media.AudioDeviceInfo
 import android.os.Handler
 import android.os.Looper
@@ -21,7 +22,10 @@ enum class BridgeState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
  * server's playback stream (virtual mic). No framing, no handshake. Default
  * format S16LE @ 44100 Hz stereo; must match the server config.
  */
-class ClientSession(private val onState: (BridgeState, String) -> Unit) {
+class ClientSession(
+    private val context: Context,
+    private val onState: (BridgeState, String) -> Unit,
+) {
     private val main = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
     private var socket: Socket? = null
@@ -80,7 +84,7 @@ class ClientSession(private val onState: (BridgeState, String) -> Unit) {
 
                 val writeT = if (!disableMic) {
                     val out: OutputStream = sock.getOutputStream()
-                    val cap = CaptureEngine(rate, channels, anc)
+                    val cap = CaptureEngine(context, rate, channels, anc)
                     capture = cap
                     Thread({ writeLoop(sock, cap, out) }, "pw-write")
                         .apply { priority = Thread.MAX_PRIORITY }
