@@ -30,7 +30,7 @@ class ClientSession(private val onState: (BridgeState, String) -> Unit) {
 
     val isActive: Boolean get() = running.get()
 
-    fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean) {
+    fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean, disableMic: Boolean = false) {
         if (!running.compareAndSet(false, true)) return
         post(BridgeState.CONNECTING, "Connecting to $host:$port")
         Thread({
@@ -72,20 +72,24 @@ class ClientSession(private val onState: (BridgeState, String) -> Unit) {
                 sock.soTimeout = 0
                 android.util.Log.d("PWDBG", "connect t3 drain=${SystemClock.elapsedRealtime() - t0}ms bytes=$drained")
 
-                post(BridgeState.CONNECTED, "Streaming: $host:$port")
+                post(BridgeState.CONNECTED, if (disableMic) "Streaming (receive only): $host:$port" else "Streaming: $host:$port")
 
-                val out: OutputStream = sock.getOutputStream()
                 val readT = Thread({ readLoop(sock, pl, RateResampler(rate, channels), rate) }, "pw-read")
                     .apply { priority = Thread.MAX_PRIORITY }
-                val cap = CaptureEngine(rate, channels, anc)
-                capture = cap
-                val writeT = Thread({ writeLoop(sock, cap, out) }, "pw-write")
-                    .apply { priority = Thread.MAX_PRIORITY }
                 readT.start()
-                writeT.start()
+
+                val writeT = if (!disableMic) {
+                    val out: OutputStream = sock.getOutputStream()
+                    val cap = CaptureEngine(rate, channels, anc)
+                    capture = cap
+                    Thread({ writeLoop(sock, cap, out) }, "pw-write")
+                        .apply { priority = Thread.MAX_PRIORITY }
+                        .also { it.start() }
+                } else null
+
                 android.util.Log.d("PWDBG", "connect t4 spawn=${SystemClock.elapsedRealtime() - t0}ms")
                 readT.join()
-                writeT.join()
+                writeT?.join()
             } catch (e: Exception) {
                 lastState = BridgeState.ERROR
                 errMsg = e.message ?: e.javaClass.simpleName

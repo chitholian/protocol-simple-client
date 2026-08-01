@@ -78,6 +78,14 @@
             android:checked="true"
             android:text="Echo cancel + noise suppression (mic)" />
 
+        <Switch
+            android:id="@+id/swDisableMic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:checked="false"
+            android:text="Disable mic (receive audio only)" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

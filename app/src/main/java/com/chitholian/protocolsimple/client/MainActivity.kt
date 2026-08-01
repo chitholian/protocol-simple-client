@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etRate: EditText
     private lateinit var etChannels: EditText
     private lateinit var swAnc: Switch
+    private lateinit var swDisableMic: Switch
     private lateinit var btnConnect: Button
     private lateinit var btnMute: Button
     private lateinit var tvStatus: TextView
@@ -49,7 +50,8 @@ class MainActivity : AppCompatActivity() {
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
-        if (result[Manifest.permission.RECORD_AUDIO] == true) {
+        val recordAudioGranted = result[Manifest.permission.RECORD_AUDIO] == true
+        if (swDisableMic.isChecked || recordAudioGranted) {
             if (pendingConnect) {
                 pendingConnect = false
                 doConnect()
@@ -88,6 +90,7 @@ class MainActivity : AppCompatActivity() {
         etRate = findViewById(R.id.etRate)
         etChannels = findViewById(R.id.etChannels)
         swAnc = findViewById(R.id.swAnc)
+        swDisableMic = findViewById(R.id.swDisableMic)
         btnConnect = findViewById(R.id.btnConnect)
         btnMute = findViewById(R.id.btnMute)
         tvStatus = findViewById(R.id.tvStatus)
@@ -103,6 +106,14 @@ class MainActivity : AppCompatActivity() {
         etRate.setText(prefs.getString("rate", nativeRate.toString()))
         etChannels.setText(prefs.getString("channels", "2"))
         swAnc.isChecked = prefs.getBoolean("anc", true)
+        swDisableMic.isChecked = prefs.getBoolean("disable_mic", false)
+
+        swDisableMic.setOnCheckedChangeListener { _, isChecked ->
+            val (s, _) = service?.currentState() ?: (BridgeState.DISCONNECTED to "")
+            val active = s == BridgeState.CONNECTED || s == BridgeState.CONNECTING
+            swAnc.isEnabled = !active && !isChecked
+            btnMute.isEnabled = s == BridgeState.CONNECTED && !isChecked
+        }
 
         btnConnect.setOnClickListener { onConnectClick() }
         btnMute.isEnabled = false
@@ -216,7 +227,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun missingPermissions(): List<String> {
-        val need = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        val need = mutableListOf<String>()
+        if (!swDisableMic.isChecked) {
+            need += Manifest.permission.RECORD_AUDIO
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             need += Manifest.permission.BLUETOOTH_CONNECT
         }
@@ -234,6 +248,7 @@ class MainActivity : AppCompatActivity() {
         val port = etPort.text.toString().toIntOrNull() ?: 4711
         val rate = etRate.text.toString().toIntOrNull() ?: 44100
         val channels = etChannels.text.toString().toIntOrNull() ?: 2
+        val disableMic = swDisableMic.isChecked
         if (host.isEmpty()) {
             Toast.makeText(this, "Enter PC IP address", Toast.LENGTH_SHORT).show()
             return
@@ -248,6 +263,7 @@ class MainActivity : AppCompatActivity() {
             .putString("rate", rate.toString())
             .putString("channels", channels.toString())
             .putBoolean("anc", swAnc.isChecked)
+            .putBoolean("disable_mic", disableMic)
             .apply()
 
         try {
@@ -258,7 +274,7 @@ class MainActivity : AppCompatActivity() {
         }
         val svc = service
         if (svc != null) {
-            svc.connect(host, port, rate, channels, swAnc.isChecked)
+            svc.connect(host, port, rate, channels, swAnc.isChecked, disableMic)
         } else {
             // Service still starting; onServiceConnected will call doConnect()
             pendingConnect = true
@@ -268,10 +284,11 @@ class MainActivity : AppCompatActivity() {
     private fun onState(state: BridgeState, msg: String) {
         tvStatus.text = "${state.name} — $msg"
         val active = state == BridgeState.CONNECTED || state == BridgeState.CONNECTING
+        val micDisabled = swDisableMic.isChecked
         btnConnect.text = if (active) "Disconnect" else "Connect"
         btnConnect.isEnabled = state != BridgeState.CONNECTING
-        btnMute.isEnabled = state == BridgeState.CONNECTED
-        if (state != BridgeState.CONNECTED && micMuted) {
+        btnMute.isEnabled = state == BridgeState.CONNECTED && !micDisabled
+        if ((state != BridgeState.CONNECTED || micDisabled) && micMuted) {
             micMuted = false
             btnMute.text = "Mute mic"
         }
@@ -279,7 +296,8 @@ class MainActivity : AppCompatActivity() {
         etPort.isEnabled = !active
         etRate.isEnabled = !active
         etChannels.isEnabled = !active
-        swAnc.isEnabled = !active
+        swAnc.isEnabled = !active && !micDisabled
+        swDisableMic.isEnabled = !active
     }
 
     private fun refreshDevices() {

@@ -50,9 +50,9 @@ class AudioBridgeService : Service() {
 
     fun currentState(): Pair<BridgeState, String> = lastState to lastMsg
 
-    fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean) {
+    fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean, disableMic: Boolean = false) {
         if (session?.isActive == true) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        if (!disableMic && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
             lastState = BridgeState.ERROR
@@ -70,7 +70,7 @@ class AudioBridgeService : Service() {
                 stopForegroundService()
             }
         }
-        session?.connect(host, port, rate, channels, anc)
+        session?.connect(host, port, rate, channels, anc, disableMic)
     }
 
     fun disconnect() {
