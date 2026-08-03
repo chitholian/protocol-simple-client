@@ -4,50 +4,60 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioTrack
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
- * Low-latency PCM playback engine. Wraps a streaming AudioTrack in
- * PERFORMANCE_MODE_LOW_LATENCY. Output routing is done by (re)creating the
- * track with setPreferredDevice — setting `preferredDevice` on a live track is
- * ignored by many OEMs (notably Samsung), so the track is rebuilt on the
- * pw-read thread when a device change is pending.
+ * PCM playback engine. Wraps a streaming AudioTrack.
+ * In media mode, uses PERFORMANCE_MODE_LOW_LATENCY and small buffer sizes.
+ * In voice communication mode (mic enabled + ANC), uses PERFORMANCE_MODE_NONE
+ * and natural minBuf sizing to avoid voice DSP buffer underruns (robotic audio).
+ * Output routing is done by (re)creating the track with setPreferredDevice.
+ * Downmixes stereo to mono dynamically when target device/voice stream requires it.
  */
 class PlaybackEngine(
     val sampleRate: Int,
-    private val channels: Int,
+    private val inputChannels: Int,
+    private val useVoiceCallStream: Boolean = false,
 ) {
     private var track: AudioTrack? = null
     private var framesWritten = 0L
 
-    /** Device requested by the UI thread; consumed on the next write. */
     @Volatile
     private var pendingDevice: AudioDeviceInfo? = null
 
-    /** Identity of the device the current track was built with. */
     @Volatile
     private var currentDevice: AudioDeviceInfo? = null
 
-    val bytesPerFrame: Int get() = 2 * channels
+    @Volatile
+    private var deviceChanged: Boolean = true
 
-    /** bytes for one 5ms chunk (frame aligned) */
+    @Volatile
+    private var outputChannels: Int = inputChannels
+
+    val bytesPerFrame: Int get() = 2 * inputChannels
+
+    /** bytes for one 5ms chunk of input PCM (frame aligned) */
     val chunkBytes: Int get() = sampleRate / 200 * bytesPerFrame
 
     private val channelMask: Int
-        get() = if (channels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+        get() = if (outputChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
 
     fun open() {
         if (track != null) return
-        rebuild(currentDevice)
+        deviceChanged = false
+        rebuild(pendingDevice)
         val t = track ?: return
         // Kick the HAL clock: the playback head only advances once data flows.
         try {
-            t.write(ByteArray(chunkBytes), 0, chunkBytes, AudioTrack.WRITE_BLOCKING)
+            val initBuf = if (inputChannels == 2 && outputChannels == 1) {
+                downmixStereoToMono(ByteArray(chunkBytes))
+            } else {
+                ByteArray(chunkBytes)
+            }
+            t.write(initBuf, 0, initBuf.size, AudioTrack.WRITE_BLOCKING)
         } catch (_: Exception) {
         }
-        // Wait until the HAL actually starts consuming (its start latency can
-        // be 100-400ms on some devices). While we wait, the server keeps
-        // streaming into the socket; the caller discards that backlog so the
-        // phone clock aligns with the stream instead of lagging permanently.
         val deadline = android.os.SystemClock.uptimeMillis() + 2000
         while (t.playbackHeadPosition == 0 && android.os.SystemClock.uptimeMillis() < deadline) {
             Thread.sleep(10)
@@ -56,10 +66,10 @@ class PlaybackEngine(
 
     /** Blocking write of one chunk. Returns false if the engine was released. */
     fun write(buf: ByteArray): Boolean {
-        val pending = pendingDevice
-        if (pending != null && pending !== currentDevice) {
+        if (deviceChanged) {
+            deviceChanged = false
             try {
-                rebuild(pending)
+                rebuild(pendingDevice)
             } catch (_: Exception) {
                 return false
             }
@@ -67,7 +77,12 @@ class PlaybackEngine(
         val t = track ?: return false
         return try {
             framesWritten += buf.size / bytesPerFrame
-            t.write(buf, 0, buf.size, AudioTrack.WRITE_BLOCKING) == buf.size
+            val writeData = if (inputChannels == 2 && outputChannels == 1) {
+                downmixStereoToMono(buf)
+            } else {
+                buf
+            }
+            t.write(writeData, 0, writeData.size, AudioTrack.WRITE_BLOCKING) == writeData.size
         } catch (_: Exception) {
             false
         }
@@ -76,6 +91,7 @@ class PlaybackEngine(
     /** null = system default routing. Safe from any thread; applied on write. */
     fun setPreferredDevice(device: AudioDeviceInfo?) {
         pendingDevice = device
+        deviceChanged = true
     }
 
     fun fillFrames(): Int {
@@ -87,6 +103,23 @@ class PlaybackEngine(
         }
     }
 
+    private fun determineOutputChannels(device: AudioDeviceInfo?): Int {
+        if (inputChannels == 1) return 1
+        if (useVoiceCallStream) return 1
+        if (device != null) {
+            val counts = device.channelCounts
+            if (counts.isNotEmpty() && !counts.contains(2) && counts.contains(1)) {
+                return 1
+            }
+            if (device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ||
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            ) {
+                return 1
+            }
+        }
+        return 2
+    }
+
     private fun rebuild(device: AudioDeviceInfo?) {
         try {
             track?.stop()
@@ -94,15 +127,25 @@ class PlaybackEngine(
         }
         track?.release()
         track = null
+
+        outputChannels = determineOutputChannels(device)
+
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT
         )
-        android.util.Log.d("PlaybackEngine", "rebuild rate=$sampleRate ch=$channels dev=$device minBuf=$minBuf frames=${minBuf / bytesPerFrame}")
+        android.util.Log.d(
+            "PlaybackEngine",
+            "rebuild rate=$sampleRate inCh=$inputChannels outCh=$outputChannels dev=$device minBuf=$minBuf frames=${minBuf / (2 * outputChannels)}"
+        )
+        val usage = if (useVoiceCallStream) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
+        val contentType = if (useVoiceCallStream) AudioAttributes.CONTENT_TYPE_SPEECH else AudioAttributes.CONTENT_TYPE_MUSIC
+        val perfMode = if (useVoiceCallStream) AudioTrack.PERFORMANCE_MODE_NONE else AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+
         val t = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(usage)
+                    .setContentType(contentType)
                     .build()
             )
             .setAudioFormat(
@@ -113,15 +156,34 @@ class PlaybackEngine(
                     .build()
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .setPerformanceMode(perfMode)
             .setBufferSizeInBytes(minBuf)
             .build()
+
         t.setPreferredDevice(device)
         t.play()
-        val sz = t.setBufferSizeInFrames(512)
+
+        val targetFrames = if (useVoiceCallStream) 1024 else 512
+        val sz = t.setBufferSizeInFrames(targetFrames)
         android.util.Log.d("PlaybackEngine", "shrunk buffer $sz frames (${sz * 1000 / sampleRate}ms)")
+
         track = t
         currentDevice = device
+    }
+
+    private fun downmixStereoToMono(stereo: ByteArray): ByteArray {
+        val numFrames = stereo.size / 4
+        val mono = ByteArray(numFrames * 2)
+        val src = ByteBuffer.wrap(stereo).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        val dst = ByteBuffer.wrap(mono).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        var i = 0
+        while (i < numFrames) {
+            val l = src.get().toInt()
+            val r = src.get().toInt()
+            dst.put(((l + r) / 2).toShort())
+            i++
+        }
+        return mono
     }
 
     fun release() {

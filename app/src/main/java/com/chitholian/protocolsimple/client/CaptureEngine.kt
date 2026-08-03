@@ -50,9 +50,10 @@ class CaptureEngine(
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build()
 
+        val primarySource = if (anc) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.MIC
         val rec: AudioRecord = try {
             AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                .setAudioSource(primarySource)
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(minBuf)
                 .build()
@@ -133,32 +134,6 @@ class CaptureEngine(
             if (curVol < (maxVol * 0.8).toInt()) {
                 am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (maxVol * 0.85).toInt(), 0)
                 android.util.Log.d("CaptureEngine", "Boosted Bluetooth Call Volume to ${(maxVol * 0.85).toInt()}/$maxVol")
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val commDevs = am.availableCommunicationDevices
-                val targetComm = commDevs.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
-                }
-                if (targetComm != null) {
-                    am.setCommunicationDevice(targetComm)
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                if (am.isBluetoothScoAvailableOffCall) {
-                    am.startBluetoothSco()
-                    am.isBluetoothScoOn = true
-                }
-            }
-        } else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                am.clearCommunicationDevice()
-            } else {
-                @Suppress("DEPRECATION")
-                if (am.isBluetoothScoOn) {
-                    am.isBluetoothScoOn = false
-                    am.stopBluetoothSco()
-                }
             }
         }
 

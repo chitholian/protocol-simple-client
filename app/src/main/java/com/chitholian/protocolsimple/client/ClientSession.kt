@@ -2,6 +2,8 @@ package com.chitholian.protocolsimple.client
 
 import android.content.Context
 import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -32,6 +34,9 @@ class ClientSession(
     private var playback: PlaybackEngine? = null
     private var capture: CaptureEngine? = null
 
+    @Volatile
+    private var selectedOutputDevice: AudioDeviceInfo? = null
+
     val isActive: Boolean get() = running.get()
 
     fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean, disableMic: Boolean = false) {
@@ -50,7 +55,10 @@ class ClientSession(
                 sock.connect(InetSocketAddress(host, port), 5000)
                 android.util.Log.d("PWDBG", "connect t1 sock=${SystemClock.elapsedRealtime() - t0}ms")
 
-                val pl = PlaybackEngine(rate, channels)
+                val pl = PlaybackEngine(rate, channels, useVoiceCallStream = !disableMic && anc)
+                val targetDev = selectedOutputDevice
+                pl.setPreferredDevice(targetDev)
+                applyDeviceRouting(targetDev)
                 pl.open()
                 android.util.Log.d("PWDBG", "connect t2 open=${SystemClock.elapsedRealtime() - t0}ms")
 
@@ -107,24 +115,33 @@ class ClientSession(
     private fun readLoop(sock: Socket, pl: PlaybackEngine, rs: RateResampler, rate: Int) {
         val chunk = ByteArray(pl.chunkBytes)
         val bytesPerFrame = pl.bytesPerFrame
-        val startMs = SystemClock.elapsedRealtime()
+        var startMs = 0L
         var written = 0L
         var drift = 0
         var healthy = 0
         var skips = 0L
         var lastLog = 0L
+        val maxLagFrames = rate / 50 // 20ms max backlog threshold for zero lipsync lag
         try {
             val dis = DataInputStream(sock.getInputStream())
             while (running.get()) {
-                // The server produces at real-time; `written` tracks what the
-                // phone accepted. The gap (expected - written) is the whole
-                // pipeline backlog — socket and server buffers included — which
-                // available() cannot see. Resample faster while backlogged,
-                // and drop stale frames outright when the backlog grows past a
-                // threshold, keeping the offset (lipsync lag) bounded.
+                val avail = dis.available()
+                if (avail > pl.chunkBytes * 2) {
+                    val skipFrames = (avail - pl.chunkBytes) / bytesPerFrame
+                    if (skipFrames > 0) {
+                        val skipped = dis.skipBytes(skipFrames * bytesPerFrame)
+                        written += skipped / bytesPerFrame
+                        skips++
+                    }
+                }
+                dis.readFully(chunk)
+                if (startMs == 0L) {
+                    startMs = SystemClock.elapsedRealtime()
+                }
+                written += chunk.size / bytesPerFrame
                 val expected = (SystemClock.elapsedRealtime() - startMs) * rate / 1000
                 val behind = expected - written
-                if (behind > 1920) {
+                if (behind > maxLagFrames) {
                     val skipped = dis.skipBytes((behind * bytesPerFrame).toInt())
                     written += skipped / bytesPerFrame
                     drift = (drift + 4).coerceAtMost(500)
@@ -139,8 +156,6 @@ class ClientSession(
                     rs.targetRate = rate + drift
                     healthy = 0
                 }
-                dis.readFully(chunk)
-                written += chunk.size / bytesPerFrame
                 if (!pl.write(rs.process(chunk, chunk.size))) break
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastLog > 5000) {
@@ -186,7 +201,53 @@ class ClientSession(
     }
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
+        selectedOutputDevice = device
+        applyDeviceRouting(device)
         playback?.setPreferredDevice(device)
+    }
+
+    private fun applyDeviceRouting(device: AudioDeviceInfo?) {
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        android.util.Log.d("ClientSession", "applyDeviceRouting: $device (type=${device?.type})")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (device != null) {
+                val commDevs = am.availableCommunicationDevices
+                val targetComm = commDevs.firstOrNull {
+                    it.id == device.id || (it.type == device.type && it.productName == device.productName)
+                } ?: commDevs.firstOrNull { it.type == device.type }
+                if (targetComm != null) {
+                    val ok = am.setCommunicationDevice(targetComm)
+                    android.util.Log.d("ClientSession", "setCommunicationDevice(${targetComm.productName}) -> $ok")
+                } else {
+                    am.clearCommunicationDevice()
+                }
+            } else {
+                am.clearCommunicationDevice()
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            if (device?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                am.isSpeakerphoneOn = true
+                if (am.isBluetoothScoOn) {
+                    am.isBluetoothScoOn = false
+                    am.stopBluetoothSco()
+                }
+            } else if (device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+            ) {
+                am.isSpeakerphoneOn = false
+                if (!am.isBluetoothScoOn && am.isBluetoothScoAvailableOffCall) {
+                    am.startBluetoothSco()
+                    am.isBluetoothScoOn = true
+                }
+            } else {
+                am.isSpeakerphoneOn = false
+                if (am.isBluetoothScoOn) {
+                    am.isBluetoothScoOn = false
+                    am.stopBluetoothSco()
+                }
+            }
+        }
     }
 
     fun setMicMuted(muted: Boolean) {
@@ -203,6 +264,7 @@ class ClientSession(
     }
 
     private fun teardown() {
+        applyDeviceRouting(null)
         try {
             socket?.close()
         } catch (_: Throwable) {
