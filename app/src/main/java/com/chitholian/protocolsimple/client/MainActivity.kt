@@ -132,6 +132,10 @@ class MainActivity : AppCompatActivity() {
         val channels = etChannels.text.toString().toIntOrNull() ?: 2
         val pos = if (channels == 1) "[ MONO ]" else "[ FL FR ]"
         return """
+            context.properties = {
+                default.clock.quantum = 256
+                default.clock.min-quantum = 128
+            }
             context.modules = [
                 {   name = libpipewire-module-protocol-simple
                     args = {
@@ -144,9 +148,11 @@ class MainActivity : AppCompatActivity() {
                         audio.position = $pos
                         capture.props = {
                             stream.capture.sink = true
+                            node.latency = "256/$rate"
                         }
                         playback.props = {
                             media.class = "Audio/Source"
+                            node.always-process = true
                             node.latency = "256/$rate"
                         }
                     }

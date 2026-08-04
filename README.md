@@ -47,10 +47,15 @@ context.modules = [
             capture.props = {
                 # Monitor the default sink: phone hears what PC plays
                 stream.capture.sink = true
+                node.latency = "256/48000"
             }
             playback.props = {
                 # Phone mic appears on PC as a virtual source
                 media.class = "Audio/Source"
+                # Drain the socket even with no consumer linked, so the
+                # phone's TCP write never blocks behind a full buffer
+                node.always-process = true
+                node.latency = "256/48000"
             }
         }
     }
