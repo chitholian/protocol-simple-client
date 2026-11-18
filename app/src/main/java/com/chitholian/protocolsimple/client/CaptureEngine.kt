@@ -1,5 +1,6 @@
 package com.chitholian.protocolsimple.client
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -19,6 +20,8 @@ import java.nio.ByteOrder
  * recording session. mono -> N-channel expansion happens in [toWire] so the
  * wire format always matches the server config (default stereo).
  */
+// RECORD_AUDIO is verified by AudioBridgeService.connect() before a CaptureEngine is created.
+@SuppressLint("MissingPermission")
 class CaptureEngine(
     private val context: Context,
     private val sampleRate: Int,
