@@ -6,11 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.Process
 import android.view.Menu
 import android.view.MenuItem
@@ -44,10 +47,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMute: Button
     private lateinit var tvStatus: TextView
     private lateinit var acDevices: MaterialAutoCompleteTextView
-    private lateinit var btnRefresh: Button
     private lateinit var acInputDevices: MaterialAutoCompleteTextView
-    private lateinit var btnRefreshInput: Button
     private var micMuted = false
+
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            refreshDevices()
+            refreshInputDevices()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            refreshDevices()
+            refreshInputDevices()
+        }
+    }
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -98,9 +111,7 @@ class MainActivity : AppCompatActivity() {
         btnMute = findViewById(R.id.btnMute)
         tvStatus = findViewById(R.id.tvStatus)
         acDevices = findViewById(R.id.acDevices)
-        btnRefresh = findViewById(R.id.btnRefresh)
         acInputDevices = findViewById(R.id.acInputDevices)
-        btnRefreshInput = findViewById(R.id.btnRefreshInput)
 
         val prefs = getSharedPreferences("pw_client", Context.MODE_PRIVATE)
         etHost.setText(prefs.getString("host", ""))
@@ -126,8 +137,6 @@ class MainActivity : AppCompatActivity() {
             service?.setMicMuted(micMuted)
             btnMute.text = if (micMuted) "Unmute mic" else "Mute mic"
         }
-        btnRefresh.setOnClickListener { refreshDevices() }
-        btnRefreshInput.setOnClickListener { refreshInputDevices() }
     }
 
     private fun generatePipeWireConfig(): String {
@@ -209,12 +218,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        getSystemService(AudioManager::class.java)
+            .registerAudioDeviceCallback(deviceCallback, Handler(Looper.getMainLooper()))
+        refreshDevices()
+        refreshInputDevices()
         if (!bound) {
             bindService(Intent(this, AudioBridgeService::class.java), conn, Context.BIND_AUTO_CREATE)
         }
     }
 
     override fun onStop() {
+        getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(deviceCallback)
         if (bound) {
             service?.setListener(null)
             unbindService(conn)
@@ -337,14 +351,15 @@ class MainActivity : AppCompatActivity() {
         dropdown.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, labels))
 
         val prefs = getSharedPreferences("pw_client", Context.MODE_PRIVATE)
-        val saved = prefs.getInt(prefsKey, 0)
-        val position = if (saved in labels.indices) saved else 0
+        val savedId = prefs.getInt(prefsKey, -1)
+        val index = devices.indexOfFirst { it.id == savedId }
+        val position = if (index >= 0) index + 1 else 0
         // setText(..., false) skips the filter, so restoring never fires the click listener.
         dropdown.setText(labels[position], false)
         onSelect(devices.getOrNull(position - 1))
 
         dropdown.setOnItemClickListener { _, _, i, _ ->
-            prefs.edit().putInt(prefsKey, i).apply()
+            prefs.edit().putInt(prefsKey, devices.getOrNull(i - 1)?.id ?: -1).apply()
             onSelect(devices.getOrNull(i - 1))
         }
     }
