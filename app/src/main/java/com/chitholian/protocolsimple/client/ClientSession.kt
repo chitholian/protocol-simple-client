@@ -37,6 +37,9 @@ class ClientSession(
     @Volatile
     private var selectedOutputDevice: AudioDeviceInfo? = null
 
+    @Volatile
+    private var selectedInputDevice: AudioDeviceInfo? = null
+
     val isActive: Boolean get() = running.get()
 
     fun connect(host: String, port: Int, rate: Int, channels: Int, anc: Boolean, disableMic: Boolean = false) {
@@ -93,6 +96,7 @@ class ClientSession(
                 val writeT = if (!disableMic) {
                     val out: OutputStream = sock.getOutputStream()
                     val cap = CaptureEngine(context, rate, channels, anc)
+                    cap.setPreferredDevice(selectedInputDevice)
                     capture = cap
                     Thread({ writeLoop(sock, cap, out) }, "pw-write")
                         .apply { priority = Thread.MAX_PRIORITY }
@@ -204,6 +208,11 @@ class ClientSession(
         selectedOutputDevice = device
         applyDeviceRouting(device)
         playback?.setPreferredDevice(device)
+    }
+
+    fun setInputDevice(device: AudioDeviceInfo?) {
+        selectedInputDevice = device
+        capture?.setPreferredDevice(device)
     }
 
     private fun applyDeviceRouting(device: AudioDeviceInfo?) {

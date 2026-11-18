@@ -14,10 +14,9 @@ import android.os.IBinder
 import android.os.Process
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -25,6 +24,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 
 class MainActivity : AppCompatActivity() {
 
@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private var bound = false
     private var pendingConnect = false
     private val devices = ArrayList<AudioDeviceInfo>()
+    private val inputDevices = ArrayList<AudioDeviceInfo>()
 
     private lateinit var etHost: EditText
     private lateinit var etPort: EditText
@@ -42,10 +43,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConnect: Button
     private lateinit var btnMute: Button
     private lateinit var tvStatus: TextView
-    private lateinit var rgDevices: RadioGroup
+    private lateinit var acDevices: MaterialAutoCompleteTextView
     private lateinit var btnRefresh: Button
+    private lateinit var acInputDevices: MaterialAutoCompleteTextView
+    private lateinit var btnRefreshInput: Button
     private var micMuted = false
-    private lateinit var btnSetup: Button
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -69,6 +71,7 @@ class MainActivity : AppCompatActivity() {
             val (s, m) = service?.currentState() ?: (BridgeState.DISCONNECTED to "Disconnected")
             onState(s, m)
             refreshDevices()
+            refreshInputDevices()
             if (pendingConnect) {
                 pendingConnect = false
                 doConnect()
@@ -94,9 +97,10 @@ class MainActivity : AppCompatActivity() {
         btnConnect = findViewById(R.id.btnConnect)
         btnMute = findViewById(R.id.btnMute)
         tvStatus = findViewById(R.id.tvStatus)
-        rgDevices = findViewById(R.id.rgDevices)
+        acDevices = findViewById(R.id.acDevices)
         btnRefresh = findViewById(R.id.btnRefresh)
-        btnSetup = findViewById(R.id.btnSetup)
+        acInputDevices = findViewById(R.id.acInputDevices)
+        btnRefreshInput = findViewById(R.id.btnRefreshInput)
 
         val prefs = getSharedPreferences("pw_client", Context.MODE_PRIVATE)
         etHost.setText(prefs.getString("host", ""))
@@ -123,8 +127,7 @@ class MainActivity : AppCompatActivity() {
             btnMute.text = if (micMuted) "Unmute mic" else "Mute mic"
         }
         btnRefresh.setOnClickListener { refreshDevices() }
-        btnSetup.setOnClickListener { showSetupGuide() }
-        rgDevices.setOnCheckedChangeListener { _, id -> onDeviceSelected(id) }
+        btnRefreshInput.setOnClickListener { refreshInputDevices() }
     }
 
     private fun generatePipeWireConfig(): String {
@@ -186,6 +189,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_setup) {
+            showSetupGuide()
+            return true
+        }
         if (item.itemId == R.id.action_quit) {
             quit()
             return true
@@ -306,47 +313,51 @@ class MainActivity : AppCompatActivity() {
         swDisableMic.isEnabled = !active
     }
 
-    private fun refreshDevices() {
+    private fun refreshDevices() = refreshDeviceDropdown(
+        acDevices, devices, AudioManager.GET_DEVICES_OUTPUTS, OUTPUT_TYPES, "device_id"
+    ) { service?.setOutputDevice(it) }
+
+    private fun refreshInputDevices() = refreshDeviceDropdown(
+        acInputDevices, inputDevices, AudioManager.GET_DEVICES_INPUTS, INPUT_TYPES, "input_device_id"
+    ) { service?.setInputDevice(it) }
+
+    private fun refreshDeviceDropdown(
+        dropdown: MaterialAutoCompleteTextView,
+        devices: MutableList<AudioDeviceInfo>,
+        direction: Int,
+        types: Set<Int>,
+        prefsKey: String,
+        onSelect: (AudioDeviceInfo?) -> Unit,
+    ) {
         devices.clear()
-        rgDevices.removeAllViews()
-        val default = RadioButton(this)
-        default.id = 0
-        default.text = "Default (auto)"
-        default.isChecked = true
-        rgDevices.addView(default)
+        devices += getSystemService(AudioManager::class.java).getDevices(direction)
+            .filter { it.type in types }
+        val labels = mutableListOf("Default (auto)")
+        labels += devices.map { "${it.productName} (${typeLabel(it.type)})" }
+        dropdown.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, labels))
 
-        val am = getSystemService(AudioManager::class.java)
-        val list = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .filter { it.type in OUTPUT_TYPES }
-        list.forEachIndexed { i, d ->
-            devices.add(d)
-            val rb = RadioButton(this)
-            rb.id = i + 1
-            rb.text = "${d.productName} (${typeLabel(d.type)})"
-            rgDevices.addView(rb)
+        val prefs = getSharedPreferences("pw_client", Context.MODE_PRIVATE)
+        val saved = prefs.getInt(prefsKey, 0)
+        val position = if (saved in labels.indices) saved else 0
+        // setText(..., false) skips the filter, so restoring never fires the click listener.
+        dropdown.setText(labels[position], false)
+        onSelect(devices.getOrNull(position - 1))
+
+        dropdown.setOnItemClickListener { _, _, i, _ ->
+            prefs.edit().putInt(prefsKey, i).apply()
+            onSelect(devices.getOrNull(i - 1))
         }
-
-        val saved = getSharedPreferences("pw_client", Context.MODE_PRIVATE)
-            .getInt("device_id", 0)
-        if (saved == 0 || saved <= devices.size) {
-            rgDevices.check(saved)
-        }
-    }
-
-    private fun onDeviceSelected(id: Int) {
-        val dev = if (id == 0) null else devices.getOrNull(id - 1)
-        service?.setOutputDevice(dev)
-        getSharedPreferences("pw_client", Context.MODE_PRIVATE)
-            .edit().putInt("device_id", id).apply()
     }
 
     private fun typeLabel(type: Int): String = when (type) {
         AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "earpiece"
         AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "built-in mic"
         AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired headset"
         AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "wired headphones"
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "bluetooth"
         AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth SCO"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "BLE headset"
         AudioDeviceInfo.TYPE_USB_DEVICE -> "USB"
         AudioDeviceInfo.TYPE_USB_HEADSET -> "USB headset"
         AudioDeviceInfo.TYPE_LINE_ANALOG -> "line out"
@@ -370,6 +381,15 @@ class MainActivity : AppCompatActivity() {
             AudioDeviceInfo.TYPE_LINE_DIGITAL,
             AudioDeviceInfo.TYPE_HDMI,
             AudioDeviceInfo.TYPE_REMOTE_SUBMIX,
+        )
+
+        private val INPUT_TYPES = setOf(
+            AudioDeviceInfo.TYPE_BUILTIN_MIC,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
         )
     }
 }

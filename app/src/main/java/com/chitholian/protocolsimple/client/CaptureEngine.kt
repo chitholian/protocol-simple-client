@@ -34,6 +34,9 @@ class CaptureEngine(
     private var wireBuf: ByteArray? = null
     private var deviceCallback: AudioDeviceCallback? = null
 
+    @Volatile
+    private var selectedInput: AudioDeviceInfo? = null
+
     /** When true, the mic stream is replaced with digital silence. */
     @Volatile
     var muted: Boolean = false
@@ -118,27 +121,37 @@ class CaptureEngine(
         deviceCallback = cb
     }
 
+    fun setPreferredDevice(device: AudioDeviceInfo?) {
+        selectedInput = device
+        val rec = record
+        if (rec != null) {
+            if (device != null) {
+                rec.setPreferredDevice(device)
+                android.util.Log.d("CaptureEngine", "Mic preferred device (user) set to: ${device.productName} (type ${device.type})")
+            } else {
+                context.getSystemService(AudioManager::class.java)?.let { updateMicRouting(it, rec) }
+            }
+        }
+    }
+
     private fun updateMicRouting(am: AudioManager, rec: AudioRecord?) {
         val targetRec = rec ?: return
-        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        val btInput = inputs.firstOrNull {
-            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        val explicit = selectedInput
+        if (explicit != null) {
+            targetRec.setPreferredDevice(explicit)
+            if (isBluetoothInput(explicit)) boostBluetoothCallVolume(am)
+            android.util.Log.d("CaptureEngine", "Mic preferred device (user) = ${explicit.productName}")
+            return
         }
+        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val btInput = inputs.firstOrNull { isBluetoothInput(it) }
         val externalMic = btInput ?: inputs.firstOrNull {
             it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
             it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
             it.type == AudioDeviceInfo.TYPE_USB_DEVICE
         }
 
-        if (btInput != null) {
-            val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
-            val curVol = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
-            if (curVol < (maxVol * 0.8).toInt()) {
-                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (maxVol * 0.85).toInt(), 0)
-                android.util.Log.d("CaptureEngine", "Boosted Bluetooth Call Volume to ${(maxVol * 0.85).toInt()}/$maxVol")
-            }
-        }
+        if (btInput != null) boostBluetoothCallVolume(am)
 
         if (externalMic != null) {
             targetRec.setPreferredDevice(externalMic)
@@ -146,6 +159,19 @@ class CaptureEngine(
         } else {
             targetRec.setPreferredDevice(null)
             android.util.Log.d("CaptureEngine", "Mic preferred device reset to default built-in mic")
+        }
+    }
+
+    private fun isBluetoothInput(d: AudioDeviceInfo): Boolean =
+        d.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && d.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+
+    private fun boostBluetoothCallVolume(am: AudioManager) {
+        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+        val curVol = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+        if (curVol < (maxVol * 0.8).toInt()) {
+            am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (maxVol * 0.85).toInt(), 0)
+            android.util.Log.d("CaptureEngine", "Boosted Bluetooth Call Volume to ${(maxVol * 0.85).toInt()}/$maxVol")
         }
     }
 

@@ -24,6 +24,8 @@ class AudioBridgeService : Service() {
     private var lastState = BridgeState.DISCONNECTED
     private var lastMsg = "Disconnected"
     private var session: ClientSession? = null
+    private var outputDevice: AudioDeviceInfo? = null
+    private var inputDevice: AudioDeviceInfo? = null
 
     inner class LocalBinder : Binder() {
         fun service() = this@AudioBridgeService
@@ -70,6 +72,8 @@ class AudioBridgeService : Service() {
                 stopForegroundService()
             }
         }
+        session?.setOutputDevice(outputDevice)
+        session?.setInputDevice(inputDevice)
         session?.connect(host, port, rate, channels, anc, disableMic)
     }
 
@@ -83,7 +87,13 @@ class AudioBridgeService : Service() {
     }
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
+        outputDevice = device
         session?.setOutputDevice(device)
+    }
+
+    fun setInputDevice(device: AudioDeviceInfo?) {
+        inputDevice = device
+        session?.setInputDevice(device)
     }
 
     fun setMicMuted(muted: Boolean) {
